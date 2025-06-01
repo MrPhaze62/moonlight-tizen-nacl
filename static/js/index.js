@@ -1129,6 +1129,8 @@ function onWindowLoad() {
     }
   });
 
+  loadProductInfos();
+  
   console.log('Load stored remote audio prefs');
   getData('remoteAudio', function (previousValue) {
     if (previousValue.remoteAudio == null) {

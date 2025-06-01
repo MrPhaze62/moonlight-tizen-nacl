@@ -5,6 +5,17 @@ var myUniqueid = '0123456789ABCDEF'; // Use the same UID as other Moonlight clie
 var api; // `api` should only be set if we're in a host-specific screen. on the initial screen it should always be null.
 var isInGame = false; // flag indicating whether the game stream started
 
+function loadProductInfos() {
+  const modelCodePlaceholder = document.getElementById("modelCodePlaceholder");
+  if (modelCodePlaceholder) {
+    const model = window.tizen.systeminfo.getCapability('http://tizen.org/system/model_name') || "Not Available";
+    const moonlightVersion = window.tizen.application.getAppInfo().version || "Not Available";
+    const tizenVersion = window.tizen.systeminfo.getCapability('http://tizen.org/feature/platform.version') || "Not Available";
+    modelCodePlaceholder.innerText = `TV Model: ${model} ; Moonlight: v${moonlightVersion} ; Tizen: v${tizenVersion}`;
+  }
+}
+
+
 // Called by the common.js module.
 function attachListeners() {
   changeUiModeForNaClLoad();

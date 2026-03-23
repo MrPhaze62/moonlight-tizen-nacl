@@ -769,6 +769,7 @@ function startGame(host, appID) {
 function playGameMode() {
   console.log('%c[index.js, playGameMode]', 'color:green;', 'Entering play game mode');
   isInGame = true;
+  Controller.stopWatching(); // Hand off controller to NaCl, stop JS polling
 
   $("#main-navigation").hide();
   $("#main-content").children().not("#listener, #loadingSpinner").hide();
@@ -832,6 +833,7 @@ function stopGameWithConfirmation() {
 
 function stopGame(host, callbackFunction) {
   isInGame = false;
+  Controller.startWatching(); // Return controller to JS for menu navigation
 
   if (!host.paired) {
     return;
@@ -1180,19 +1182,19 @@ window.addEventListener('gamepadconnected', function (event) {
   var connectedGamepad = event.gamepad;
   console.log('%c[index.js, gamepadconnected] gamepad connected: ', 'color: green;', connectedGamepad);
 
-  if (connectedGamepad.vibrationActuator) { // Check if the gamepad supports rumble
-    console.log('Gamepad supports vibration.');
-    connectedGamepad.vibrationActuator.playEffect('dual-rumble', {
-      duration: 1000,
-      strongMagnitude: 1.0,
-      weakMagnitude: 1.0});
-  } else {
-    console.log('Gamepad does not support vibration.');
+  // Wrapped in try/catch - Tizen 4.0 may crash on vibrationActuator access
+  try {
+    if (connectedGamepad.vibrationActuator && connectedGamepad.vibrationActuator.playEffect) {
+      console.log('Gamepad supports vibration.');
+      connectedGamepad.vibrationActuator.playEffect('dual-rumble', {
+        duration: 1000,
+        strongMagnitude: 1.0,
+        weakMagnitude: 1.0
+      });
+    } else {
+      console.log('Gamepad does not support vibration.');
+    }
+  } catch(e) {
+    console.log('Gamepad vibration not supported on this Tizen version:', e);
   }
-});
-
-window.addEventListener('gamepaddisconnected', function (event) {
-  console.log('%c[index.js, gamepaddisconnected] gamepad disconnected: ' +
-    JSON.stringify(event.gamepad),
-    event.gamepad);
 });

@@ -67,6 +67,12 @@ function attachListeners() {
       gamepadMapping[key]();
     }
   });
+	 // DEBUG: log all keydown events during gameplay to detect BT shoulder/trigger keys
+  window.addEventListener('keydown', function(e) {
+    if (isInGame) {
+      console.log('[index.js, keydown] isInGame keyCode=' + e.keyCode + ' key=' + e.key + ' keyIdentifier=' + e.keyIdentifier);
+    }
+  });
 }
 
 function changeUiModeForNaClLoad() {
@@ -1173,7 +1179,18 @@ function onWindowLoad() {
   });
 
   initSamsungKeys();
+  
+   // DEBUG: dump all supported input device keys
+  try {
+    var supportedKeys = tizen.tvinputdevice.getSupportedKeys();
+    for (var i = 0; i < supportedKeys.length; i++) {
+      console.log('[index.js, supportedKeys] name=' + supportedKeys[i].name + ' code=' + supportedKeys[i].code);
+    }
+  } catch(e) {
+    console.log('[index.js, supportedKeys] failed:', e);
+  }
 }
+
 
 window.onload = onWindowLoad;
 

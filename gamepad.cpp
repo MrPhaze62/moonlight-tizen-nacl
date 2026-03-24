@@ -3,18 +3,40 @@
 #include <Limelight.h>
 #include <sstream>
 
-// Dead zone threshold for axes
 #define AXIS_DEAD_ZONE 0.1f
 
 static const unsigned short k_StandardGamepadButtonMapping[] = {
     A_FLAG, B_FLAG, X_FLAG, Y_FLAG,
     LB_FLAG, RB_FLAG,
-    0, 0, // Indices 6,7: triggers handled via axis on older Tizen
+    0, 0,
     BACK_FLAG, PLAY_FLAG,
     LS_CLK_FLAG, RS_CLK_FLAG,
     UP_FLAG, DOWN_FLAG, LEFT_FLAG, RIGHT_FLAG,
     SPECIAL_FLAG
 };
+
+static const unsigned short k_BTGamepadButtonMapping[] = {
+    A_FLAG,       // btn0
+    B_FLAG,       // btn1
+    0,            // btn2 unused
+    X_FLAG,       // btn3
+    Y_FLAG,       // btn4
+    0,            // btn5 unused
+    0,            // btn6 right stick X (handled as axis)
+    0,            // btn7 right stick Y (handled as axis)
+    BACK_FLAG,    // btn8
+    PLAY_FLAG,    // btn9
+    LS_CLK_FLAG,  // btn10
+    RS_CLK_FLAG,  // btn11
+    UP_FLAG,      // btn12
+    DOWN_FLAG,    // btn13
+    LEFT_FLAG,    // btn14
+    RIGHT_FLAG,   // btn15
+    SPECIAL_FLAG  // btn16
+};
+
+static bool s_padSeen[4] = {false, false, false, false};
+static bool s_isTizenBT[4] = {false, false, false, false};
 
 static float ApplyDeadZone(float value) {
     if (value > -AXIS_DEAD_ZONE && value < AXIS_DEAD_ZONE) {
@@ -29,14 +51,9 @@ static short GetActiveGamepadMask(PP_GamepadsSampleData& gamepadData) {
 
     for (unsigned int p = 0; p < gamepadData.length; p++) {
         PP_GamepadSampleData& padData = gamepadData.items[p];
-
-        printf("[NaCl, GetActiveGamepadMask] Gamepad %u: connected = %d, timestamp = %f\n",
-               p, padData.connected, padData.timestamp);
-
         if (!padData.connected) {
             continue;
         }
-
         activeGamepadMask |= (1 << controllerIndex);
         controllerIndex++;
     }
@@ -52,16 +69,30 @@ void MoonlightInstance::PollGamepads() {
     m_GamepadApi->Sample(pp_instance(), &gamepadData);
     activeGamepadMask = GetActiveGamepadMask(gamepadData);
 
-    printf("[NaCl] Active gamepad mask: %d\n", activeGamepadMask);
-
     for (unsigned int p = 0; p < gamepadData.length; p++) {
         PP_GamepadSampleData& padData = gamepadData.items[p];
 
         if (!padData.connected) {
+            s_padSeen[p] = false;
+            s_isTizenBT[p] = false;
+            controllerIndex++;
             continue;
         }
 
-        // Tizen 4.0 may report timestamp=0 permanently — always send if so
+        // Latch BT detection once on first sight of this pad,
+        // but wait until both axes have settled to non-zero values
+        if (!s_padSeen[p]) {
+            if (padData.axes_length >= 2) {
+                float ax0 = padData.axes[0];
+                float ax1 = padData.axes[1];
+                if (ax0 != 0.0f && ax1 != 0.0f) {
+                    s_padSeen[p] = true;
+                    s_isTizenBT[p] = (ax0 > 0.5f && ax0 < 1.5f &&
+                                      ax1 > 0.5f && ax1 < 1.5f);
+                }
+            }
+        }
+
         if (padData.timestamp != 0 && padData.timestamp == m_LastPadTimestamps[p]) {
             controllerIndex++;
             continue;
@@ -69,78 +100,69 @@ void MoonlightInstance::PollGamepads() {
 
         m_LastPadTimestamps[p] = padData.timestamp;
 
-        printf("[NaCl] Gamepad %u: axes_length=%u buttons_length=%u\n",
-               p, padData.axes_length, padData.buttons_length);
+        bool isTizenBT = s_isTizenBT[p];
 
         int buttonFlags = 0;
         unsigned char leftTrigger = 0, rightTrigger = 0;
         short leftStickX = 0, leftStickY = 0;
         short rightStickX = 0, rightStickY = 0;
 
-        // Detect axis layout:
-        // 6-axis = old Tizen layout: axes[0-1]=LS, axes[2]=combined triggers, axes[3-4]=RS
-        // 4-axis = standard layout:  axes[0-1]=LS, axes[2-3]=RS (triggers are buttons 6,7)
-        bool oldTizenAxisLayout = (padData.axes_length >= 5);
+        const unsigned short* mapping = isTizenBT ?
+            k_BTGamepadButtonMapping : k_StandardGamepadButtonMapping;
+        size_t mappingSize = isTizenBT ?
+            sizeof(k_BTGamepadButtonMapping) / sizeof(k_BTGamepadButtonMapping[0]) :
+            sizeof(k_StandardGamepadButtonMapping) / sizeof(k_StandardGamepadButtonMapping[0]);
 
-        // Handle buttons (skip trigger button indices on old Tizen layout)
-        for (unsigned int i = 0; i < padData.buttons_length; i++) {
-            if (i >= sizeof(k_StandardGamepadButtonMapping) / sizeof(k_StandardGamepadButtonMapping[0])) {
-                break;
+        if (isTizenBT) {
+            // Buttons
+            for (unsigned int i = 0; i < padData.buttons_length && i < mappingSize; i++) {
+                if (mapping[i] && padData.buttons[i] > 0.5f) {
+                    buttonFlags |= mapping[i];
+                }
             }
 
-            if (oldTizenAxisLayout) {
-                // On old Tizen, LT/RT come from axis[2], not buttons 6/7 — skip those
-                if (i == 6 || i == 7) {
-                    continue;
-                }
-            } else {
-                // Standard layout: triggers ARE buttons 6 and 7
+            // Left stick: axes offset by 1.0 (range 0-2, center ~1.0)
+            if (padData.axes_length >= 2) {
+                float lx = padData.axes[0] - 1.0f;
+                float ly = padData.axes[1] - 1.0f;
+                leftStickX = (short)(ApplyDeadZone(lx) * 0x7FFF);
+                leftStickY = (short)(-ApplyDeadZone(ly) * 0x7FFF);
+            }
+
+            // Right stick: packed into btn6 (X) and btn7 (Y)
+            // range 0-1, center ~0.5, remap to -1 to 1
+            if (padData.buttons_length > 7) {
+                float rx = (padData.buttons[6] - 0.5f) * 2.0f;
+                float ry = (padData.buttons[7] - 0.5f) * 2.0f;
+                rightStickX = (short)(ApplyDeadZone(rx) * 0x7FFF);
+                rightStickY = (short)(-ApplyDeadZone(ry) * 0x7FFF);
+            }
+
+            // LB, RB, LT, RT not reported on Tizen 4.0 BT - left as zero
+
+        } else {
+            // Standard USB layout
+            for (unsigned int i = 0; i < padData.buttons_length && i < mappingSize; i++) {
                 if (i == 6) {
-                    leftTrigger = padData.buttons[i] * 0xFF;
+                    leftTrigger = (unsigned char)(padData.buttons[i] * 0xFF);
                     continue;
                 }
                 if (i == 7) {
-                    rightTrigger = padData.buttons[i] * 0xFF;
+                    rightTrigger = (unsigned char)(padData.buttons[i] * 0xFF);
                     continue;
+                }
+                if (mapping[i] && padData.buttons[i] > 0.5f) {
+                    buttonFlags |= mapping[i];
                 }
             }
 
-            if (padData.buttons[i] > 0.5f) {
-                buttonFlags |= k_StandardGamepadButtonMapping[i];
+            if (padData.axes_length >= 2) {
+                leftStickX = (short)(ApplyDeadZone(padData.axes[0]) * 0x7FFF);
+                leftStickY = (short)(-ApplyDeadZone(padData.axes[1]) * 0x7FFF);
             }
-        }
-
-        if (oldTizenAxisLayout) {
-            // Old Tizen Xbox layout:
-            // axes[0] = left stick X
-            // axes[1] = left stick Y
-            // axes[2] = combined trigger axis (LT=-1..0, RT=0..1)
-            // axes[3] = right stick X
-            // axes[4] = right stick Y
-            leftStickX = ApplyDeadZone(padData.axes[0]) * 0x7FFF;
-            leftStickY = -ApplyDeadZone(padData.axes[1]) * 0x7FFF;
-
-            float triggerAxis = padData.axes[2];
-            if (triggerAxis < -AXIS_DEAD_ZONE) {
-                // LT is being pressed (negative range)
-                leftTrigger = (unsigned char)((-triggerAxis) * 0xFF);
-            } else if (triggerAxis > AXIS_DEAD_ZONE) {
-                // RT is being pressed (positive range)
-                rightTrigger = (unsigned char)(triggerAxis * 0xFF);
-            }
-
-            if (padData.axes_length >= 5) {
-                rightStickX = ApplyDeadZone(padData.axes[3]) * 0x7FFF;
-                rightStickY = -ApplyDeadZone(padData.axes[4]) * 0x7FFF;
-            }
-        } else {
-            // Standard layout: axes[0-1]=LS, axes[2-3]=RS
-            leftStickX = ApplyDeadZone(padData.axes[0]) * 0x7FFF;
-            leftStickY = -ApplyDeadZone(padData.axes[1]) * 0x7FFF;
-
             if (padData.axes_length >= 4) {
-                rightStickX = ApplyDeadZone(padData.axes[2]) * 0x7FFF;
-                rightStickY = -ApplyDeadZone(padData.axes[3]) * 0x7FFF;
+                rightStickX = (short)(ApplyDeadZone(padData.axes[2]) * 0x7FFF);
+                rightStickY = (short)(-ApplyDeadZone(padData.axes[3]) * 0x7FFF);
             }
         }
 

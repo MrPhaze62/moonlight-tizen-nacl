@@ -9,7 +9,7 @@ GameStream client for Samsung Smart TV's running Tizen OS (3.0 to 6.0)
 
 ## PLEASE DO NOT USE MY FORK, THIS IS MY TESTING FORK. Please use the installation below or the actual link to the original which will be untouched, and linked to the official/original build.
 
-https://github.com/OneLiberty/moonlight-chrome-tizen
+https://github.com/OneLiberty/moonlight-tizen-nacl
 
 
 ### Note
